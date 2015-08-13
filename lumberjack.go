@@ -34,8 +34,8 @@ import (
 )
 
 const (
-	backupTimeFormat = "2006-01-02T15-04-05.000"
-	defaultMaxSize   = 100
+	backupTimeFormat = "2006-01-02_150405"
+	defaultMaxSize   = 10
 )
 
 // ensure we always implement io.WriteCloser
@@ -70,6 +70,12 @@ type Logger struct {
 	// in the same directory.  It uses <processname>-lumberjack.log in
 	// os.TempDir() if empty.
 	Filename string `json:"filename" yaml:"filename"`
+
+	// Dirname is the directory location to write logs to
+	Dirname string
+
+	// Prefix is
+	Prefix string
 
 	// MaxSize is the maximum size in megabytes of the log file before it gets
 	// rotated. It defaults to 100 megabytes.
@@ -108,6 +114,8 @@ var (
 	// variable so tests can mock it out and not need to write megabytes of data
 	// to disk.
 	megabyte = 1024 * 1024
+
+	rotated = make(chan bool, 1)
 )
 
 // Write implements io.Writer.  If a write would cause the log file to be larger
@@ -182,7 +190,12 @@ func (l *Logger) rotate() error {
 	if err := l.openNew(); err != nil {
 		return err
 	}
+	rotated <- true
 	return l.cleanup()
+}
+
+func (l *Logger) NotifyRotated() chan bool {
+	return rotated
 }
 
 // openNew opens a new log file for writing, moving any old log file out of the
@@ -214,7 +227,7 @@ func (l *Logger) openNew() error {
 	// we use truncate here because this should only get called when we've moved
 	// the file ourselves. if someone else creates the file in the meantime,
 	// just wipe out the contents.
-	f, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	f, err := os.OpenFile(l.setUTCfilename(), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return fmt.Errorf("can't open new logfile: %s", err)
 	}
@@ -275,6 +288,15 @@ func (l *Logger) filename() string {
 	}
 	name := filepath.Base(os.Args[0]) + "-lumberjack.log"
 	return filepath.Join(os.TempDir(), name)
+}
+
+func (l *Logger) setUTCfilename() string {
+	t := time.Now().UTC()
+
+	timestamp := t.Format(backupTimeFormat)
+	name := filepath.Join(l.Dirname, fmt.Sprintf("%s_%s%s", l.Prefix, timestamp, ".log"))
+	l.Filename = name
+	return name
 }
 
 // cleanup deletes old log files, keeping at most l.MaxBackups files, as long as
